@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eve-bus"
+version = "0.1.0"
+authors = [{ name = "Ray", email = "ray@rayainfo.cn" }]
+license = "MIT"
+description = "A lightweight event bus implementation using Redis"
+readme = "README.md"
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = [
+  "redis>=5.0.0",
+  "pydantic>=2.0.0",
+  "dependency-injector>=4.41.0",
+  "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  # Development dependencies can be added here
+  # "pytest>=7.0.0",
+  # "black>=22.0.0",
+  # "isort>=5.0.0",
+  # "flake8>=5.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/DotNetAge/eve-bus"
+"Bug Tracker" = "https://github.com/DotNetAge/eve-bus/issues"
