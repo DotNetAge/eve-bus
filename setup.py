@@ -4,18 +4,9 @@ import os
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# 确保我们包含所有子包和数据文件
-def package_data_dirs(package, roots):
-    """Get the data directories for the package."""
-    dirs = []
-    for root in roots:
-        for dirpath, _, _ in os.walk(os.path.join(package, root)):
-            dirs.append(os.path.relpath(dirpath, package))
-    return dirs
-
 setup(
     name="eve-bus",
-    version="0.1.1",
+    version="0.1.2",
     author="Ray",
     author_email="ray@rayainfo.cn",
     description="A lightweight event bus implementation using Redis",
@@ -23,11 +14,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/DotNetAge/eve-bus",
     package_dir={"": "."},
-    packages=find_packages(include=["eve", "eve.*"]),
-    package_data={
-        "eve": package_data_dirs("eve", ["adapters", "domain", "ports"])
-    },
-    include_package_data=True,
+    packages=find_packages(include=["eve"]),
     classifiers=[
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",

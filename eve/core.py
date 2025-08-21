@@ -1,24 +1,100 @@
-"""Redis Bus
+"""Bus Module
 
-This module implements the bus using Redis as the message broker.
+Provides event publishing and subscription functionality with Redis as the message broker.
 """
 
-from typing import Dict, List, Optional, Callable, Any
+from typing import Callable, Dict, Any, Optional, TypeVar
+import logging
+import os
+from abc import ABC, abstractmethod
+from dotenv import load_dotenv
+import redis
+from redis.client import PubSub
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from collections import defaultdict
 import json
-import logging
-from redis.client import PubSub
-import redis
-import os
-from eve.ports.events import EventSubscriberPort, EventPublisherPort
-from eve.domain.events import Event
-from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+# Generic type for type annotation
+handler_type = TypeVar("handler_type", bound=Callable[[Dict[str, Any]], None])
+
+
+class Event(BaseModel):
+    """Base event class for all domain events.
+
+    All domain events should inherit from this class.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    @property
+    def name(self) -> str:
+        """Get the event name."""
+        return self.__class__.__name__
+
+    def model_dump_json(self, **kwargs) -> str:
+        """Convert the event to a JSON string."""
+        # Override if needed for custom serialization
+        return super().model_dump_json(**kwargs)
+
+    @classmethod
+    def model_validate_json(cls, json_data: str) -> "Event":
+        """Create an event from a JSON string."""
+        # Override if needed for custom deserialization
+        return super().model_validate_json(json_data)
+
+
+class EventPublisherPort(ABC):
+    """Domain event publisher port.
+
+    This interface defines the contract for publishing domain events.
+    """
+
+    @abstractmethod
+    def publish(self, event: Event):
+        """Publish a domain event.
+
+        Args:
+            event: The event object to publish
+        """
+        ...
+
+
+class EventSubscriberPort(ABC):
+    """Domain event subscriber port.
+
+    This interface defines the contract for subscribing to domain events.
+    """
+
+    @abstractmethod
+    def subscribe(self, event_name: str, handler: Callable[[Dict[str, Any]], None]):
+        """Subscribe to events with the specified name.
+
+        Args:
+            event_name: The name of the event to subscribe to
+            handler: The function to call when the event is published
+        """
+        ...
+
+    @abstractmethod
+    def unsubscribe(
+        self,
+        event_name: str,
+        handler: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ):
+        """Unsubscribe from events with the specified name.
+
+        Args:
+            event_name: The name of the event to unsubscribe from
+            handler: Optional, the specific handler to unsubscribe. If not provided,
+                     all handlers for the event will be unsubscribed.
+        """
+        ...
 
 
 class RedisEventBus(EventSubscriberPort, EventPublisherPort):
@@ -189,21 +265,31 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         try:
             # Use a timeout to allow checking shutdown flag periodically
             pubsub.timeout = 1.0  # 1 second timeout
-            
+
             for item in pubsub.listen():
                 # Check if shutdown is in progress
                 with self._shutdown_lock:
                     if self._shutdown_flag:
                         logger.info(f"Listener detected shutdown signal: {event_name}")
                         break
-                        
+
                 # Check for control messages
                 if item.get("type") == "message":
-                    channel = item.get("channel", b"").decode("utf-8") if isinstance(item.get("channel"), bytes) else item.get("channel", "")
+                    channel = (
+                        item.get("channel", b"").decode("utf-8")
+                        if isinstance(item.get("channel"), bytes)
+                        else item.get("channel", "")
+                    )
                     if channel == control_channel:
-                        data = item.get("data", b"").decode("utf-8") if isinstance(item.get("data"), bytes) else item.get("data", "")
+                        data = (
+                            item.get("data", b"").decode("utf-8")
+                            if isinstance(item.get("data"), bytes)
+                            else item.get("data", "")
+                        )
                         if data == "shutdown":
-                            logger.info(f"Listener received shutdown control message: {event_name}")
+                            logger.info(
+                                f"Listener received shutdown control message: {event_name}"
+                            )
                             break
                 try:
                     if item["type"] == "message":
@@ -217,15 +303,19 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
                             # Initialize variables to avoid UnboundLocalError
                             event = None
                             event_str = ""
-                            
+
                             # Extract the event name from the channel
                             # The channel is in format: channel_prefix:event_name
-                            channel_parts = item["channel"].decode("utf-8").split(":") if isinstance(item["channel"], bytes) else item["channel"].split(":")
+                            channel_parts = (
+                                item["channel"].decode("utf-8").split(":")
+                                if isinstance(item["channel"], bytes)
+                                else item["channel"].split(":")
+                            )
                             if len(channel_parts) >= 2:
                                 actual_event_name = channel_parts[1]
                             else:
                                 actual_event_name = "Event"
-                            
+
                             # Check if data is bytes or string
                             if isinstance(item["data"], bytes):
                                 try:
@@ -241,36 +331,42 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
                                 try:
                                     # If data is string, it's already hex encoded
                                     # Decode from hex to get the original JSON string
-                                    event_str = bytes.fromhex(item["data"]).decode("utf-8")
+                                    event_str = bytes.fromhex(item["data"]).decode(
+                                        "utf-8"
+                                    )
                                 except Exception as e:
                                     logger.error(f"Failed to decode event data: {e}")
                                     logger.error(f"Raw data: {item['data']}")
                                     continue
-                            
+
                             # Now try to decode the event with the correct type
                             try:
                                 import json
+
                                 event_data = json.loads(event_str)
-                                
+
                                 # Try to find the specific event class by name
                                 from eve.domain.events import Event
+
                                 found_specific_class = False
-                                
+
                                 # Get all subclasses of Event including nested ones
                                 all_subclasses = []
+
                                 def get_all_subclasses(cls):
                                     for subclass in cls.__subclasses__():
                                         all_subclasses.append(subclass)
                                         get_all_subclasses(subclass)
+
                                 get_all_subclasses(Event)
-                                
+
                                 # Try to find a matching subclass
                                 for subclass in all_subclasses:
                                     if subclass.__name__ == actual_event_name:
                                         event = subclass(**event_data)
                                         found_specific_class = True
                                         break
-                                
+
                                 # If no specific class found, use base Event class
                                 if not found_specific_class:
                                     event = Event.model_validate_json(event_str)
@@ -278,13 +374,17 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
                                 logger.error(f"Failed to parse event data: {e}")
                                 logger.error(f"Event data: {event_str}")
                                 continue
-                            
+
                             if event:
-                                logger.info(f"Successfully decoded event: {actual_event_name}")
+                                logger.info(
+                                    f"Successfully decoded event: {actual_event_name}"
+                                )
                                 # Add the event to the queue for batch processing only if it's valid
                                 self._queue_event(event)
                             else:
-                                logger.warning("Received event is None after decoding attempt")
+                                logger.warning(
+                                    "Received event is None after decoding attempt"
+                                )
                         except Exception as e:
                             logger.error(f"Failed to parse event: {e}")
                             logger.error(f"Raw data: {item['data']}")
@@ -293,7 +393,10 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         except Exception as e:
             # Check if the error is due to PubSub being closed normally
             error_msg = str(e)
-            if "I/O operation on closed file" in error_msg or "connection pool is closed" in error_msg:
+            if (
+                "I/O operation on closed file" in error_msg
+                or "connection pool is closed" in error_msg
+            ):
                 # This is an expected error when the listener is intentionally stopped
                 logger.debug(f"Listener stopped normally: {event_name}")
             else:
@@ -339,7 +442,9 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         # Add the event to the queue
         with self.event_queue_lock:
             self.event_queue[event.name].append((event, args_obj))
-            logger.debug(f"Event {event.name} added to queue. Queue size: {len(self.event_queue[event.name])}")
+            logger.debug(
+                f"Event {event.name} added to queue. Queue size: {len(self.event_queue[event.name])}"
+            )
 
         # Schedule event processing
         with self.processing_scheduled_lock:
@@ -366,7 +471,9 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         with self.event_queue_lock:
             events_to_process = self.event_queue[event_name].copy()
             self.event_queue[event_name] = []
-            logger.debug(f"Retrieved {len(events_to_process)} events from queue for {event_name}")
+            logger.debug(
+                f"Retrieved {len(events_to_process)} events from queue for {event_name}"
+            )
 
         with self.handler_lock:
             handlers = self.event_handlers.get(event_name, []).copy()
@@ -456,7 +563,9 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         try:
             control_channel = self.control_channel
             self.redis_client.publish(control_channel, "shutdown")
-            logger.info(f"Published shutdown control message to channel: {control_channel}")
+            logger.info(
+                f"Published shutdown control message to channel: {control_channel}"
+            )
         except Exception as e:
             logger.warning(f"Failed to publish shutdown control message: {e}")
 
@@ -473,9 +582,11 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
         # Force close Redis connection to ensure all threads are interrupted
         try:
             # Forcefully close the Redis connection pool - this is crucial for interrupting blocking calls
-            if hasattr(self.redis_client, 'connection_pool'):
+            if hasattr(self.redis_client, "connection_pool"):
                 # Use a more aggressive approach to disconnect
-                for connection in self.redis_client.connection_pool._available_connections:
+                for (
+                    connection
+                ) in self.redis_client.connection_pool._available_connections:
                     try:
                         connection.disconnect()
                     except:
@@ -495,35 +606,41 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
             import time
             import sys
             import gc
-            
+
             # Create a timer to ensure we don't wait too long
             def force_shutdown():
                 logger.warning("Forcing thread pool shutdown due to timeout")
                 # This is a last resort - clear all references to help garbage collection
                 try:
-                    if hasattr(self.executor, '_threads'):
+                    if hasattr(self.executor, "_threads"):
                         # Mark threads as daemon to allow interpreter to exit
                         for thread in list(self.executor._threads):
                             if thread.is_alive():
-                                logger.warning(f"Marking thread as daemon: {thread.name}")
+                                logger.warning(
+                                    f"Marking thread as daemon: {thread.name}"
+                                )
                                 thread.daemon = True  # This allows Python to exit even if thread is running
                 except Exception as e:
                     logger.error(f"Error during force shutdown: {e}")
-            
+
             # Start the timer
             timer = threading.Timer(timeout, force_shutdown)
             timer.daemon = True
             timer.start()
-            
+
             # Try to shutdown normally with cancel_futures=True and reduced wait time
-            self.executor.shutdown(wait=False, cancel_futures=True)  # Set wait=False to prevent blocking
-            
+            self.executor.shutdown(
+                wait=False, cancel_futures=True
+            )  # Set wait=False to prevent blocking
+
             # Give a brief moment for threads to terminate gracefully
             time.sleep(min(0.5, timeout))
-            
+
             # Cancel the timer if we're done
             timer.cancel()
-            logger.info("Event bus thread pool has been shut down with non-blocking termination")
+            logger.info(
+                "Event bus thread pool has been shut down with non-blocking termination"
+            )
         except Exception as e:
             logger.error(f"Failed to shutdown thread pool: {e}")
 
@@ -538,7 +655,7 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
                 self.event_queue.clear()
             with self.processing_scheduled_lock:
                 self.processing_scheduled.clear()
-            
+
             # Force garbage collection to clean up any remaining references
             gc.collect()
             logger.info("Event bus resources cleared and garbage collected")
@@ -546,3 +663,110 @@ class RedisEventBus(EventSubscriberPort, EventPublisherPort):
             logger.error(f"Failed to clear event bus resources: {e}")
 
         logger.info("Event bus has been shut down completely")
+
+
+# Global event bus instance (will be initialized when first accessed)
+_event_bus_instance: Optional[RedisEventBus] = None
+
+
+def _get_event_bus() -> RedisEventBus:
+    """Lazily get the event bus instance to avoid circular imports.
+
+    Returns:
+        RedisEventBus instance
+    """
+    global _event_bus_instance
+    if _event_bus_instance is None:
+        # Create a default Redis client if no container is available
+        import redis
+
+        redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=os.getenv("REDIS_PORT", 6379),
+            db=os.getenv("REDIS_DB", 0),
+            password=os.getenv("REDIS_PASSWORD", None),
+            decode_responses=True,
+        )
+        _event_bus_instance = RedisEventBus(redis_client)
+    return _event_bus_instance
+
+
+def set_event_bus(event_bus: RedisEventBus):
+    """Set a custom event bus instance.
+
+    This is useful when integrating with dependency injection frameworks.
+
+    Args:
+        event_bus: RedisEventBus instance to use
+    """
+    global _event_bus_instance
+    _event_bus_instance = event_bus
+
+
+def subscribe(
+    event_name: str, handler: Optional[Callable[[Dict[str, Any]], None]] = None
+) -> Any:
+    """Subscribe to events with the specified name.
+
+    Can be used as a normal function call or as a decorator.
+
+    Args:
+        event_name: The name of the event to subscribe to
+        handler: Optional, the function to call when the event is published
+                 Not needed when used as a decorator
+
+    Returns:
+        When used as a decorator, returns the decorated function; otherwise None
+    """
+    # Case when used as a decorator
+    if handler is None:
+
+        def decorator(func: handler_type) -> handler_type:
+            _get_event_bus().subscribe(event_name, func)
+            return func
+
+        return decorator
+
+    # Case when used as a normal function call
+    _get_event_bus().subscribe(event_name, handler)
+
+
+def unsubscribe(
+    event_name: str, handler: Optional[Callable[[Dict[str, Any]], None]] = None
+):
+    """Unsubscribe from events with the specified name.
+
+    Args:
+        event_name: The name of the event to unsubscribe from
+        handler: Optional, the specific handler to unsubscribe. If not provided,
+                 all handlers for the event will be unsubscribed.
+    """
+    _get_event_bus().unsubscribe(event_name, handler)
+
+
+def publish(event):
+    """Publish an event.
+
+    Args:
+        event: The event object to publish
+    """
+    _get_event_bus().publish(event)
+
+
+# Alias for backward compatibility
+def subscript(event_name: str, handler):
+    """Subscribe method (for backward compatibility)"""
+    subscribe(event_name, handler)
+
+
+# Export the main classes and functions
+__all__ = [
+    "RedisEventBus",
+    "subscribe",
+    "unsubscribe",
+    "publish",
+    "subscript",
+    "set_event_bus",
+    "_get_event_bus",
+    "Event",
+]

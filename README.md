@@ -37,8 +37,7 @@ pip install eve-bus
 
 ```python
 from redis import Redis
-from eve.adapters.events import RedisEventBus, subscribe, publish, set_event_bus
-from eve.domain.events import Event
+from eve.core import RedisEventBus, subscribe, publish, set_event_bus, Event
 
 # Create a Redis client
 redis_client = Redis(host='localhost', port=6379, db=0)
@@ -76,8 +75,7 @@ Eve Bus integrates seamlessly with dependency injection frameworks like `depende
 ```python
 from dependency_injector import containers, providers
 from redis import Redis
-from eve.adapters.events import RedisEventBus, subscribe, set_event_bus
-from eve.domain.events import Event
+from eve.core import RedisEventBus, subscribe, set_event_bus, Event
 
 class Container(containers.DeclarativeContainer):
     # Redis client provider
@@ -129,8 +127,7 @@ Here's how to integrate Eve Bus with FastAPI:
 ```python
 from fastapi import FastAPI, Depends, BackgroundTasks
 from redis import Redis
-from eve.adapters.events import RedisEventBus, subscribe, publish, set_event_bus
-from eve.domain.events import Event
+from eve.core import RedisEventBus, subscribe, publish, set_event_bus, Event
 from pydantic import BaseModel
 import uvicorn
 

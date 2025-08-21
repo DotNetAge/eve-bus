@@ -6,14 +6,14 @@ This example demonstrates how to use the Eve Bus library for basic event publish
 import logging
 import time
 from redis import Redis
-from eve.adapters.events import (
+from eve.core import (
     RedisEventBus,
     subscribe,
     publish,
     set_event_bus,
     unsubscribe,
+    Event
 )
-from eve.domain.events import Event
 
 # Configure logging
 logging.basicConfig(

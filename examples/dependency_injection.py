@@ -6,8 +6,7 @@ import logging
 import time
 from dependency_injector import containers, providers
 from redis import Redis
-from eve.adapters.events import RedisEventBus, subscribe, publish, set_event_bus
-from eve.domain.events import Event
+from eve.core import RedisEventBus, subscribe, publish, set_event_bus, Event
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
