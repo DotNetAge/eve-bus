@@ -172,3 +172,6 @@ eve_bus.egg-info/
 
 # Don't ignore venv .gitignore
 !venv/.gitignore
+
+build/
+dist/
